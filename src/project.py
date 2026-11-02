@@ -1,112 +1,164 @@
+# ============================================================
+# Cybercrime / Fraud Detection - Operational Analyst Project
+# ============================================================
 import os
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, recall_score, precision_score
+from sklearn.metrics import (classification_report, confusion_matrix,
+                             ConfusionMatrixDisplay, precision_recall_curve,
+                             average_precision_score, roc_auc_score)
 
-# Ensure the output directory for visualization anchors exists
-os.makedirs('images', exist_ok=True)
+os.makedirs("images", exist_ok=True)
+sns.set_style("whitegrid")
 
-print("⚡ [Phase 1/5] Initializing Operational Threat Detection Pipeline...")
-# 1. LOAD AND AUDIT THE DATASET
-# Operational Context: Credit Card transactions data from Kaggle (highly imbalanced)
-try:
-    df = pd.read_csv('data/creditcard.csv')
-except FileNotFoundError:
-    print("❌ Error: 'data/creditcard.csv' not found. Creating a simulation context...")
-    # Fallback to structural simulation if execution happens before local file mapping
-    np.random.seed(42)
-    n_samples = 5000
-    simulated_data = {
-        'Time': np.sort(np.random.uniform(0, 1000, n_samples)),
-        'V1': np.random.normal(0, 1, n_samples),
-        'V2': np.random.normal(0, 1, n_samples),
-        'Amount': np.random.exponential(50, n_samples),
-        'Class': np.random.choice([0, 1], size=n_samples, p=[0.998, 0.002])
-    }
-    df = pd.DataFrame(simulated_data)
+# ---------- 1. LOAD DATA ----------
+df = pd.read_csv("data/creditcard.csv")
+print("Shape:", df.shape)
+print(df.head())
 
-# 2. EXPLORATORY DATA ANALYSIS (EDA) & CLASS BALANCE AUDITING
-print("\n📊 [Phase 2/5] Running System Baseline Profiling...")
-total_tx = len(df)
-fraud_tx = df['Class'].sum()
-normal_tx = total_tx - fraud_tx
-fraud_percentage = (fraud_tx / total_tx) * 100
+# ---------- 2. DATA QUALITY CHECK ----------
+print("\nMissing values:", df.isnull().sum().sum())
+print("Duplicate rows:", df.duplicated().sum())
+df = df.drop_duplicates()
 
-print(f"  • Baseline System Capacity: {total_tx} transactions processed.")
-print(f"  • Flagged Operational Exceptions (Class 1 - Fraud): {fraud_tx} ({fraud_percentage:.3f}%)")
-print(f"  • Routine Verified Traffic (Class 0 - Normal): {normal_tx} ({100 - fraud_percentage:.3f}%)")
+# ---------- 3. EDA ----------
+counts = df["Class"].value_counts()
+fraud_pct = counts[1] / len(df) * 100
+print(f"\nFraud cases: {counts[1]} ({fraud_pct:.3f}% of all transactions)")
 
-# Save EDA Figure 1: Operational Imbalance Chart
-plt.figure(figsize=(6, 4))
-sns.countplot(x='Class', data=df, palette='Set2')
-plt.title('Operational Threat Distribution Baseline')
-plt.xlabel('Transaction Classification (0 = Normal, 1 = Cybercrime Anomaly)')
-plt.ylabel('System Volume Count')
-plt.xticks([0, 1], ['Normal Logs', 'Malicious Anomalies'])
-plt.tight_layout()
-plt.savefig('images/01_class_distribution.png')
+plt.figure(figsize=(5, 4))
+sns.countplot(x="Class", data=df)
+plt.yscale("log")
+plt.title("Class Distribution (0 = Normal, 1 = Fraud) - log scale")
+plt.savefig("images/01_class_distribution.png", dpi=150, bbox_inches="tight")
 plt.close()
 
-# Save EDA Figure 2: Transaction Volume vs Cyber Risk Analysis
 plt.figure(figsize=(7, 4))
-sns.boxplot(x='Class', y='Amount', data=df, showfliers=False, palette='coolwarm')
-plt.title('Operational Metrics: Financial Exposure by Traffic Class')
-plt.xlabel('Traffic Classification')
-plt.ylabel('Transaction Value Metric')
-plt.xticks([0, 1], ['Normal Logs', 'Malicious Anomalies'])
-plt.tight_layout()
-plt.savefig('images/02_financial_exposure.png')
+sns.boxplot(x="Class", y="Amount", data=df, showfliers=False)
+plt.title("Transaction Amount by Class")
+plt.savefig("images/02_amount_by_class.png", dpi=150, bbox_inches="tight")
 plt.close()
 
-# 3. DATA PARTITIONING & ARCHITECTURE MODELING
-print("\n⚙️ [Phase 3/5] Partitioning Workloads & Deploying Classifiers...")
-X = df.drop(columns=['Class'])
-y = df['Class']
+df["Hour"] = (df["Time"] // 3600) % 24
+hourly = df.groupby("Hour")["Class"].agg(["sum", "count"])
+hourly["fraud_rate_%"] = hourly["sum"] / hourly["count"] * 100
+plt.figure(figsize=(9, 4))
+hourly["fraud_rate_%"].plot(kind="bar")
+plt.title("Fraud Rate (%) by Hour of Day")
+plt.ylabel("Fraud rate %")
+plt.savefig("images/03_fraud_by_hour.png", dpi=150, bbox_inches="tight")
+plt.close()
 
-# Segment into 80% historical patterns and 20% validation production simulation
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+corr = df.drop(columns=["Hour"]).corr()["Class"].drop("Class").sort_values()
+plt.figure(figsize=(7, 8))
+corr.plot(kind="barh")
+plt.title("Correlation of Features with Fraud")
+plt.savefig("images/04_feature_correlation.png", dpi=150, bbox_inches="tight")
+plt.close()
 
-# Employing an ensemble Random Forest framework to trace multi-layered patterns
-classifier = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=12, n_jobs=-1)
-classifier.fit(X_train, y_train)
+# ---------- 4. DATA PREPARATION ----------
+X = df.drop(columns=["Class", "Hour"])
+y = df["Class"]
 
-# 4. TRADITIONAL PERFORMANCE AUDIT
-y_pred = classifier.predict(X_test)
-print("\n📈 [Phase 4/5] Standard Production Validation Summary:")
-print(classification_report(y_test, y_pred, target_names=['Normal logs', 'Threat Incident']))
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42)
 
-# 5. OPERATIONAL OPTIMIZATION AND ALERT THRESHOLD ANALYSIS
-print("\n🛠️ [Phase 5/5] Operational Review Optimization Strategy...")
-# Rather than accepting defaults, we test custom alert barriers to maximize threat capturing
-probabilities = classifier.predict_proba(X_test)[:, 1]
-custom_barriers = [0.1, 0.2, 0.3, 0.5]
+X_train = X_train.copy()
+X_test = X_test.copy()
+test_amount = X_test["Amount"].values      # raw amounts for cost analysis
 
-barrier_metrics = []
-for barrier in custom_barriers:
-    adjusted_predictions = (probabilities >= barrier).astype(int)
-    rec = recall_score(y_test, adjusted_predictions)
-    prec = precision_score(y_test, adjusted_predictions)
-    
-    # Calculate operational workload metrics
-    cm = confusion_matrix(y_test, adjusted_predictions)
-    tn, fp, fn, tp = cm.ravel()
-    total_alerts = fp + tp
-    
-    barrier_metrics.append({
-        'Barrier': barrier,
-        'Threat Capture Rate (Recall)': rec * 100,
-        'Alert Accuracy (Precision)': prec * 100,
-        'Operational Queue Burden': total_alerts
-    })
+scaler_time = StandardScaler()
+scaler_amount = StandardScaler()
+X_train["Time"] = scaler_time.fit_transform(X_train[["Time"]])
+X_test["Time"] = scaler_time.transform(X_test[["Time"]])
+X_train["Amount"] = scaler_amount.fit_transform(X_train[["Amount"]])
+X_test["Amount"] = scaler_amount.transform(X_test[["Amount"]])
 
-metrics_table = pd.DataFrame(barrier_metrics)
-print(metrics_table.to_string(index=False, formatters={
-    'Threat Capture Rate (Recall)': '{:,.2f}%'.format,
-    'Alert Accuracy (Precision)': '{:,.2f}%'.format
-}))
+# ---------- 5. MODELS ----------
+models = {
+    "Logistic Regression": LogisticRegression(max_iter=1000, class_weight="balanced"),
+    "Random Forest": RandomForestClassifier(
+        n_estimators=100, class_weight="balanced", n_jobs=-1, random_state=42),
+}
 
-print("\n🚀 Core Engine Pipeline Complete. All analytics visualizations saved inside 'images/'.")
+results = {}
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    proba = model.predict_proba(X_test)[:, 1]
+    pred = (proba >= 0.5).astype(int)
+    results[name] = proba
+    print(f"\n===== {name} =====")
+    print(classification_report(y_test, pred, digits=3))
+    print("ROC-AUC:", round(roc_auc_score(y_test, proba), 4))
+    print("PR-AUC :", round(average_precision_score(y_test, proba), 4))
+
+    ConfusionMatrixDisplay(confusion_matrix(y_test, pred)).plot(cmap="Blues")
+    plt.title(f"Confusion Matrix - {name}")
+    plt.savefig(f"images/05_cm_{name.replace(' ', '_')}.png",
+                dpi=150, bbox_inches="tight")
+    plt.close()
+
+plt.figure(figsize=(6, 5))
+for name, proba in results.items():
+    p, r, _ = precision_recall_curve(y_test, proba)
+    plt.plot(r, p, label=name)
+plt.xlabel("Recall"); plt.ylabel("Precision"); plt.legend()
+plt.title("Precision-Recall Curve")
+plt.savefig("images/06_pr_curve.png", dpi=150, bbox_inches="tight")
+plt.close()
+
+# ---------- 6. OPERATIONAL ANALYSIS ----------
+# Assumption: each manual review costs 5 currency units (analyst time).
+# A missed fraud costs the full transaction amount.
+REVIEW_COST = 5
+
+proba = results["Random Forest"]
+y_arr = y_test.values
+
+rows = []
+for t in np.linspace(0.05, 0.95, 91):
+    pred = (proba >= t).astype(int)
+    alerts = pred.sum()
+    tp = ((pred == 1) & (y_arr == 1)).sum()
+    fp = ((pred == 1) & (y_arr == 0)).sum()
+    missed_loss = test_amount[(pred == 0) & (y_arr == 1)].sum()
+    total_cost = alerts * REVIEW_COST + missed_loss
+    rows.append({"threshold": t, "alerts": alerts, "caught_fraud": tp,
+                 "false_alarms": fp, "missed_loss": missed_loss,
+                 "total_cost": total_cost})
+
+ops = pd.DataFrame(rows)
+best = ops.loc[ops["total_cost"].idxmin()]
+no_model_cost = test_amount[y_arr == 1].sum()
+
+print("\n===== OPERATIONAL RESULT =====")
+print(best)
+print(f"Cost with no detection : {no_model_cost:,.2f}")
+print(f"Cost with model        : {best['total_cost']:,.2f}")
+print(f"Saving                 : {no_model_cost - best['total_cost']:,.2f}")
+
+plt.figure(figsize=(8, 4))
+plt.plot(ops["threshold"], ops["total_cost"])
+plt.axvline(best["threshold"], color="red", linestyle="--",
+            label=f"Best threshold = {best['threshold']:.2f}")
+plt.xlabel("Alert threshold"); plt.ylabel("Total operational cost")
+plt.title("Choosing the Threshold by Total Cost"); plt.legend()
+plt.savefig("images/07_threshold_cost.png", dpi=150, bbox_inches="tight")
+plt.close()
+
+plt.figure(figsize=(8, 4))
+plt.plot(ops["alerts"], ops["caught_fraud"])
+plt.xlabel("Number of alerts reviewed (analyst workload)")
+plt.ylabel("Fraud cases caught")
+plt.title("Workload vs Fraud Caught")
+plt.savefig("images/08_workload_vs_caught.png", dpi=150, bbox_inches="tight")
+plt.close()
+
+ops.to_csv("data/threshold_analysis.csv", index=False)
+print("\nDone. Charts saved in /images")
